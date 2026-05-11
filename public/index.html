@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AppRadar - Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #6750A4;
+            --primary-container: #EADDFF;
+            --on-primary-container: #21005D;
+            --surface: #FEF7FF;
+            --outline: #79747E;
+        }
+        body {
+            font-family: 'Roboto', sans-serif;
+            background-color: var(--surface);
+            margin: 0;
+            padding: 20px;
+            color: #1C1B1F;
+        }
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding-bottom: 20px;
+            border-bottom: 1px solid var(--outline);
+        }
+        h1 { color: var(--primary); margin: 0; }
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 16px;
+            margin-top: 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+        }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th { text-align: left; padding: 12px; border-bottom: 2px solid var(--primary-container); color: var(--primary); }
+        td { padding: 12px; border-bottom: 1px solid #f0f0f0; }
+        .badge {
+            padding: 4px 8px;
+            border-radius: 16px;
+            font-size: 0.8em;
+            font-weight: 500;
+        }
+        .badge-completed { background: #C8E6C9; color: #2E7D32; }
+        .badge-pending { background: #FFE0B2; color: #E65100; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>AppRadar Dashboard</h1>
+        <div id="status">Cargando estado...</div>
+    </div>
+
+    <div class="card">
+        <h2>Carreras Activas</h2>
+        <div id="trails-list"></div>
+    </div>
+
+    <div class="card">
+        <h2>Rankings Globales</h2>
+        <select id="trail-select" onchange="loadRankings(this.value)">
+            <option value="">Selecciona una carrera</option>
+        </select>
+        <table id="rankings-table">
+            <thead>
+                <tr>
+                    <th>Pos</th>
+                    <th>Corredor</th>
+                    <th>Equipo</th>
+                    <th>Waypoints</th>
+                    <th>Tiempo Total</th>
+                    <th>Estado</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+
+    <script>
+        async function init() {
+            const statusRes = await fetch('/api/status');
+            const status = await statusRes.json();
+            document.getElementById('status').innerText = `Usuarios: ${status.totalUsers} | Carreras: ${status.totalTrails}`;
+
+            const trailsRes = await fetch('/trails');
+            const trails = await trailsRes.json();
+            const select = document.getElementById('trail-select');
+            const list = document.getElementById('trails-list');
+            
+            trails.forEach(t => {
+                const opt = document.createElement('option');
+                opt.value = t.trailUuid;
+                opt.innerText = t.name;
+                select.appendChild(opt);
+
+                const div = document.createElement('div');
+                div.style.padding = '8px 0';
+                div.innerText = `[${t.carreraId}] ${t.name}`;
+                list.appendChild(div);
+            });
+        }
+
+        async function loadRankings(trailUuid) {
+            if (!trailUuid) return;
+            const res = await fetch(`/rankings?trailUuid=${trailUuid}`);
+            const rankings = await res.json();
+            const tbody = document.querySelector('#rankings-table tbody');
+            tbody.innerHTML = '';
+            
+            rankings.forEach((r, i) => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${i + 1}</td>
+                    <td>${r.userName}</td>
+                    <td>${r.teamName}</td>
+                    <td>${r.waypointsReached}/${r.totalWaypoints}</td>
+                    <td>${(r.totalTime / 1000).toFixed(1)}s</td>
+                    <td><span class="badge ${r.isCompleted ? 'badge-completed' : 'badge-pending'}">${r.isCompleted ? 'FIN' : 'Corriendo'}</span></td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        init();
+    </script>
+</body>
+</html>
