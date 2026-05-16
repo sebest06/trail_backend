@@ -307,7 +307,7 @@ app.post('/trails/:trailId/activate', authMiddleware, requireRole('organizer', '
 
 function findOrCreateSession(trailUuid, startTime) {
   const ts = startTime || Date.now()
-  const TWO_HOURS_MS = 2 * 60 * 60 * 1000
+  const ONE_HOUR_MS = 60 * 60 * 1000
   const row = db.prepare(`
     SELECT sessionUuid, MIN(startTime) as sessionStart
     FROM race_runs
@@ -316,7 +316,7 @@ function findOrCreateSession(trailUuid, startTime) {
     HAVING sessionStart >= ? AND sessionStart <= ?
     ORDER BY sessionStart DESC
     LIMIT 1
-  `).get(trailUuid, ts - TWO_HOURS_MS, ts)
+  `).get(trailUuid, ts - ONE_HOUR_MS, ts)
   return row?.sessionUuid ?? uuidv4()
 }
 
@@ -332,7 +332,7 @@ app.post('/runs/upload', authMiddleware, (req, res) => {
   } else {
     db.prepare('UPDATE race_runs SET sessionUuid = ? WHERE runUuid = ? AND sessionUuid IS NULL').run(sessionUuid, run.runUuid)
   }
-  res.status(200).json({ ok: true })
+  res.status(200).json({ ok: true, sessionUuid })
 })
 
 app.post('/tracks/upload', authMiddleware, (req, res) => {
