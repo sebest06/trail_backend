@@ -49,7 +49,8 @@ db.exec(`
     maxSkip INTEGER DEFAULT 1,
     createdBy TEXT NOT NULL,
     isActive INTEGER DEFAULT 0,
-    startDate TEXT
+    startDate TEXT,
+    teamUuid TEXT DEFAULT NULL
   );
 
   CREATE TABLE IF NOT EXISTS waypoints (
@@ -70,7 +71,9 @@ db.exec(`
     startTime INTEGER,
     endTime INTEGER,
     totalTime INTEGER DEFAULT 0,
-    isCompleted INTEGER DEFAULT 0
+    isCompleted INTEGER DEFAULT 0,
+    isAbandoned INTEGER DEFAULT 0,
+    sessionUuid TEXT DEFAULT NULL
   );
 
   CREATE TABLE IF NOT EXISTS tracks (
@@ -93,9 +96,11 @@ db.exec(`
   );
 `)
 
-try { db.exec(`ALTER TABLE users ADD COLUMN teamStatus TEXT DEFAULT 'accepted'`) } catch (e) { /* ignores if exists */ }
-try { db.exec(`ALTER TABLE trails ADD COLUMN teamUuid TEXT DEFAULT NULL`) } catch (e) { /* ignores if exists */ }
-try { db.exec(`ALTER TABLE race_runs ADD COLUMN sessionUuid TEXT DEFAULT NULL`) } catch (e) { /* ignores if exists */ }
+// Migrations
+try { db.exec(`ALTER TABLE users ADD COLUMN teamStatus TEXT DEFAULT 'accepted'`) } catch (e) {}
+try { db.exec(`ALTER TABLE trails ADD COLUMN teamUuid TEXT DEFAULT NULL`) } catch (e) {}
+try { db.exec(`ALTER TABLE race_runs ADD COLUMN isAbandoned INTEGER DEFAULT 0`) } catch (e) {}
+try { db.exec(`ALTER TABLE race_runs ADD COLUMN sessionUuid TEXT DEFAULT NULL`) } catch (e) {}
 db.exec(`CREATE INDEX IF NOT EXISTS idx_gps_user_trail_ts ON gps_positions(userUuid, trailUuid, timestamp)`)
 
 // Seed admin user if not exists
@@ -316,21 +321,49 @@ function findOrCreateSession(trailUuid, startTime) {
     HAVING sessionStart >= ? AND sessionStart <= ?
     ORDER BY sessionStart DESC
     LIMIT 1
-  `).get(trailUuid, ts - ONE_HOUR_MS, ts)
+  `).get(trailUuid, ts - ONE_HOUR_MS, ts + ONE_HOUR_MS) // Agregado margen superior
   return row?.sessionUuid ?? uuidv4()
 }
 
 app.post('/runs/upload', authMiddleware, (req, res) => {
   const run = req.body
-  const sessionUuid = findOrCreateSession(run.trailUuid, run.startTime)
-  const existing = db.prepare('SELECT 1 FROM race_runs WHERE runUuid = ?').get(run.runUuid)
+  const existing = db.prepare('SELECT sessionUuid, startTime FROM race_runs WHERE runUuid = ?').get(run.runUuid)
+
+  const sessionUuid = existing?.sessionUuid || findOrCreateSession(run.trailUuid, run.startTime)
+
   if (!existing) {
+    const lastRun = db.prepare(`
+      SELECT startTime FROM race_runs
+      WHERE trailUuid = ? AND userUuid = ?
+      ORDER BY startTime DESC LIMIT 1
+    `).get(run.trailUuid, run.userUuid)
+
+    if (lastRun) {
+      const diff = (run.startTime || Date.now()) - lastRun.startTime
+      const ONE_HOUR = 3600_000
+      if (diff < ONE_HOUR) {
+        const remaining = Math.ceil((ONE_HOUR - diff) / 60000)
+        return res.status(403).json({
+          error: `Debes esperar ${remaining} minutos para iniciar una nueva carrera en esta ruta.`,
+          remainingMinutes: remaining
+        })
+      }
+    }
+
     db.prepare(`
-      INSERT INTO race_runs (runUuid, trailUuid, userUuid, startTime, endTime, totalTime, isCompleted, sessionUuid)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(run.runUuid, run.trailUuid, run.userUuid, run.startTime, run.endTime, run.totalTime, run.isCompleted ? 1 : 0, sessionUuid)
+      INSERT INTO race_runs (runUuid, trailUuid, userUuid, startTime, endTime, totalTime, isCompleted, isAbandoned, sessionUuid)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(run.runUuid, run.trailUuid, run.userUuid, run.startTime, run.endTime, run.totalTime, run.isCompleted ? 1 : 0, run.isAbandoned ? 1 : 0, sessionUuid)
   } else {
-    db.prepare('UPDATE race_runs SET sessionUuid = ? WHERE runUuid = ? AND sessionUuid IS NULL').run(sessionUuid, run.runUuid)
+    db.prepare('UPDATE race_runs SET sessionUuid = ?, isCompleted = ?, isAbandoned = ?, startTime = ?, endTime = ?, totalTime = ? WHERE runUuid = ?').run(
+      sessionUuid,
+      run.isCompleted ? 1 : 0,
+      run.isAbandoned ? 1 : 0,
+      run.startTime || existing.startTime,
+      run.endTime,
+      run.totalTime,
+      run.runUuid
+    )
   }
   res.status(200).json({ ok: true, sessionUuid })
 })
@@ -349,7 +382,6 @@ app.post('/tracks/upload', authMiddleware, (req, res) => {
   insertMany(tracks)
   res.status(200).json({ ok: true })
 
-  // Broadcast session-filtered rankings to listening clients
   const affectedTrails = [...new Set(tracks.map(t => t.trailUuid).filter(Boolean))]
   for (const trailUuid of affectedTrails) {
     const firstTrack = tracks.find(t => t.trailUuid === trailUuid)
@@ -364,11 +396,12 @@ app.post('/tracks/upload', authMiddleware, (req, res) => {
 // ─── Rankings ─────────────────────────────────────────────────────────────────
 
 function latestSession(trailUuid) {
-  return db.prepare(`
+  const row = db.prepare(`
     SELECT sessionUuid FROM race_runs
     WHERE trailUuid = ? AND sessionUuid IS NOT NULL
-    GROUP BY sessionUuid ORDER BY MIN(startTime) DESC LIMIT 1
-  `).get(trailUuid)?.sessionUuid ?? null
+    GROUP BY sessionUuid ORDER BY MAX(startTime) DESC LIMIT 1
+  `).get(trailUuid)
+  return row?.sessionUuid ?? null
 }
 
 function computeRankings(trailUuid, teamUuid, sessionUuid = null) {
@@ -409,7 +442,8 @@ function computeRankings(trailUuid, teamUuid, sessionUuid = null) {
       totalWaypoints,
       lastWaypointTime: lastTrack?.t ?? 0,
       totalTime: run.totalTime,
-      isCompleted: !!run.isCompleted,
+      isCompleted: run.isCompleted === 1,
+      isAbandoned: run.isAbandoned === 1,
     }
   })
 

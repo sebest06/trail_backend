@@ -4,7 +4,8 @@
   "description": "Backend for AppRadar",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test:api": "cucumber-js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
@@ -16,5 +17,9 @@
     "jsonwebtoken": "^9.0.3",
     "socket.io": "^4.8.3",
     "uuid": "^9.0.1"
+  },
+  "devDependencies": {
+    "@cucumber/cucumber": "^11.2.0",
+    "chai": "^4.5.0"
   }
 }
